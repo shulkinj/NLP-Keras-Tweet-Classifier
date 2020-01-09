@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 
 
 
@@ -11,17 +12,22 @@ class NLP_Model():
 
         # dict length without max: ~4200
         # probably only necessary if trained on larger datasets
-        self.dict_max_length = float('inf')
+        dict_max_length = float('inf')
+        WINDOW_SZ = 2
+        EMBEDDING_DIM = 10
         
+
 
         #loads in training and test data
         self.trainDF, self.testDF = self.load_data(0.8)
         
-        
-        #constructs dictionary
+                #constructs dictionary
         #loads training tweets & markings into training data for network
-        self.word_index, self.reversed_word_index = self.build_dict(self.dict_max_length) 
+        self.word_index, self.reversed_word_index = self.build_dict(dict_max_length) 
         (self.x_train,self.y_train),(self.x_test, self.y_test) = self.preprocess()
+        self.vocab_size = len(self.word_index) 
+
+        self.word2vec(WINDOW_SZ , EMBEDDING_DIM)
       
 
 
@@ -135,18 +141,74 @@ class NLP_Model():
 
         return (x_train,y_train) , (x_test,y_test)
 
+    ## Trains word embeddings
+    ## Outputs embeddings
+    def word2vec(self, WINDOW_SZ, EMBEDDING_DIM):
+        print("WORD2VEC...")
+        tf.compat.v1.disable_eager_execution()
+        ## Create data set to train embeddings
+        data = []
+        vocab_size = self.vocab_size
+        for tweet in self.x_train:
+            for index in tweet:
+                for nb_index in tweet[max(index- WINDOW_SZ,0) : min(index + WINDOW_SZ, len(tweet)+1)]:
+                    if nb_index != index:
+                        data.append([index,nb_index])
+        x_train = [] #input word
+        y_train = [] #output word
     
+        for word_pair in data:
+            x_train.append(to_one_hot(word_pair[0], vocab_size))
+            y_train.append(to_one_hot(word_pair[1], vocab_size))
+        
+        # convert them to numpy arrays
+        x_train = np.asarray(x_train)
+        y_train = np.asarray(y_train)
+
+        # making placeholders for x_train and y_train
+        x = tf.compat.v1.placeholder(tf.float32, shape=(None, vocab_size))
+        y_label = tf.compat.v1.placeholder(tf.float32, shape=(None, vocab_size))
+        
+        ##Embedding layer
+        W1 = tf.Variable(tf.random.normal([vocab_size, EMBEDDING_DIM]))
+        
+        b1 = tf.Variable(tf.random.normal([EMBEDDING_DIM]))
+        #W1 x + b1
+        hidden_representation = tf.add(tf.matmul(x,W1), b1)
+        
+        #output layer
+        W2 = tf.Variable(tf.random.normal([EMBEDDING_DIM, vocab_size]))
+        
+        b2 = tf.Variable(tf.random.normal([vocab_size]))
+        
+        prediction = tf.nn.softmax(tf.add(tf.matmul(hidden_representation,W2), b2))
+        
+
+        ## Training
+        sess = tf.compat.v1.Session()
+
+        init = tf.compat.v1.global_variables_initializer()
+
+        sess.run(init)
+
+        ##loss function
+        cross_entropy_loss = tf.reduce_mean(-tf.math.reduce_sum(y_label*tf.math.log(prediction), axis=1))
+
+        ##define training step
+        train_step = tf.compat.v1.train.GradientDescentOptimizer(0.1).minimize(cross_entropy_loss)
+        n_iters = 100000
+
+        ## train for n_iter iterations
+
+        for _ in range(n_iters):
+            sess.run(train_step,feed_dict={x:x_train, y_label: y_train})
+
+            print('loss is : ', sess.run(cross_entropy_loss,feed_dict={x: x_train, y_label: y_train}))
 
 
-
-
-
-
-
-
-
-
-
+        
+    
+    
 
 
 ##################################################################
@@ -160,6 +222,12 @@ class NLP_Model():
 def tweet_word_parse(tweet):
     import re
     return re.sub(r'[^a-zA-Z ]', '',tweet).lower().split(" ")
+
+# function to convert numbers to one hot vectors
+def to_one_hot(data_point_index, vocab_size):
+    temp = np.zeros(vocab_size)
+    temp[data_point_index] = 1
+    return temp
 
         
 
