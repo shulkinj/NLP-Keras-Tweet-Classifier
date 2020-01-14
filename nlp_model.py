@@ -1,9 +1,13 @@
+from __future__ import absolute_import, division, print_function, unicode_literals
 import os
-
+import random
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-
+from tensorflow import keras
+from tensorflow.keras import layers, Model
+from tensorflow.keras.preprocessing import sequence
+from tensorflow.keras.layers import Input, Dense, Reshape, Dot, Embedding
 
 
 class NLP_Model():
@@ -13,8 +17,10 @@ class NLP_Model():
         # dict length without max: ~4200
         # probably only necessary if trained on larger datasets
         dict_max_length = float('inf')
-        WINDOW_SZ = 2
-        EMBEDDING_DIM = 10
+        # word2vec parameters
+        WINDOW_SZ = 3
+        EMBEDDING_DIM = 50
+        W2V_EPOCHS = 10000
         
 
 
@@ -23,11 +29,12 @@ class NLP_Model():
         
                 #constructs dictionary
         #loads training tweets & markings into training data for network
-        self.word_index, self.reversed_word_index = self.build_dict(dict_max_length) 
+        self.word_index, self.reversed_word_index, self.sorted_dict = self.build_dict(dict_max_length) 
         (self.x_train,self.y_train),(self.x_test, self.y_test) = self.preprocess()
+
         self.vocab_size = len(self.word_index) 
 
-        self.word2vec(WINDOW_SZ , EMBEDDING_DIM)
+        self.word2vec(WINDOW_SZ , EMBEDDING_DIM, W2V_EPOCHS)
       
 
 
@@ -93,7 +100,7 @@ class NLP_Model():
 
 
         print("Dictionary size: ",len(word_index)," words ")
-        return word_index, reversed_word_index
+        return word_index, reversed_word_index, sorted_dict
     
 
 
@@ -135,7 +142,7 @@ class NLP_Model():
         for marking in test_markings:
             if marking[0]=='realDonaldTrump':
                 y_test.append(0)
-            elif marking[0]=='HillaryClinton':
+            elif marking[0]=='Hillar)Clinton':
                 y_test.append(1)
 
 
@@ -143,72 +150,61 @@ class NLP_Model():
 
     ## Trains word embeddings
     ## Outputs embeddings
-    def word2vec(self, WINDOW_SZ, EMBEDDING_DIM):
+    def word2vec(self, WINDOW_SZ, EMBEDDING_DIM, W2V_EPOCHS):
         print("WORD2VEC...")
-        tf.compat.v1.disable_eager_execution()
-        ## Create data set to train embeddings
-        data = []
+
+        valid_size = 16 #random word set to evaluate similarity
+        valid_window = 100 #pick samples in 100 most common words
+        valid_examples = np.random.choice(valid_window, valid_size, replace=False)
+
         vocab_size = self.vocab_size
-        for tweet in self.x_train:
-            for index in tweet:
-                for nb_index in tweet[max(index- WINDOW_SZ,0) : min(index + WINDOW_SZ, len(tweet)+1)]:
-                    if nb_index != index:
-                        data.append([index,nb_index])
-        x_train = [] #input word
-        y_train = [] #output word
-    
-        for word_pair in data:
-            x_train.append(to_one_hot(word_pair[0], vocab_size))
-            y_train.append(to_one_hot(word_pair[1], vocab_size))
+
+
+        ## skipgram set up
+        sampling_table= sequence.make_sampling_table(vocab_size, sampling_factor=0.01)
+
+        skipgrams = [sequence.skipgrams(tweet, vocab_size,window_size=WINDOW_SZ, sampling_table=sampling_table)
+                    for tweet in self.x_train]
+
+        couples , labels = skipgrams[0][0] , skipgrams[0][1]
+        word_target, word_context = zip(*couples)
+        word_target = np.array(word_target, dtype="int32")
+        word_context = np.array(word_context, dtype="int32")
         
-        # convert them to numpy arrays
-        x_train = np.asarray(x_train)
-        y_train = np.asarray(y_train)
+        ## Functional API model
 
-        # making placeholders for x_train and y_train
-        x = tf.compat.v1.placeholder(tf.float32, shape=(None, vocab_size))
-        y_label = tf.compat.v1.placeholder(tf.float32, shape=(None, vocab_size))
+        #input layers take in target and context word as ints
+        input_target = layers.Input((1,))
+        input_context = layers.Input((1,))
         
-        ##Embedding layer
-        W1 = tf.Variable(tf.random.normal([vocab_size, EMBEDDING_DIM]))
+        #embedding layer then transpose vectors to take dot prod
+        embedding = Embedding(vocab_size, EMBEDDING_DIM, input_length=1, name='embedding')
         
-        b1 = tf.Variable(tf.random.normal([EMBEDDING_DIM]))
-        #W1 x + b1
-        hidden_representation = tf.add(tf.matmul(x,W1), b1)
-        
-        #output layer
-        W2 = tf.Variable(tf.random.normal([EMBEDDING_DIM, vocab_size]))
-        
-        b2 = tf.Variable(tf.random.normal([vocab_size]))
-        
-        prediction = tf.nn.softmax(tf.add(tf.matmul(hidden_representation,W2), b2))
-        
+        target = embedding(input_target)
+        target = Reshape((EMBEDDING_DIM, 1))(target)
+        context= embedding(input_context)
+        context= Reshape((EMBEDDING_DIM, 1))(context)
 
-        ## Training
-        sess = tf.compat.v1.Session()
+        #cosine similarity to be used in validation model
+        similarity = Dot( axes=0, normalize= True)
 
-        init = tf.compat.v1.global_variables_initializer()
 
-        sess.run(init)
+        #dot product layers to measure similarity
+        dot_product = Dot(axes=1)([target,context])
+        dot_product = Reshape((1,))(dot_product)
+        #sigmoid output layer
+        output = Dense(1, activation = 'sigmoid')(dot_product)
 
-        ##loss function
-        cross_entropy_loss = tf.reduce_mean(-tf.math.reduce_sum(y_label*tf.math.log(prediction), axis=1))
-
-        ##define training step
-        train_step = tf.compat.v1.train.GradientDescentOptimizer(0.1).minimize(cross_entropy_loss)
-        n_iters = 100000
-
-        ## train for n_iter iterations
-
-        for _ in range(n_iters):
-            sess.run(train_step,feed_dict={x:x_train, y_label: y_train})
-
-            print('loss is : ', sess.run(cross_entropy_loss,feed_dict={x: x_train, y_label: y_train}))
-
+        model = Model(inputs=[input_target, input_context], outputs=output)
+        model.compile(loss='binary_crossentropy', optimizer='rmsprop')
 
         
-    
-    
+        #cosine similarity to be used in validation model
+        similarity = Dot( axes=1, normalize= True)([target,context])
+        validation_model = Model(inputs=[input_target,input_context], outputs=similarity)
+
+
+       
 
 
 ##################################################################
