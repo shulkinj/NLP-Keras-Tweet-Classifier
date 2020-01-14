@@ -18,8 +18,8 @@ class NLP_Model():
         # probably only necessary if trained on larger datasets
         dict_max_length = float('inf')
         # word2vec parameters
-        WINDOW_SZ = 3
-        EMBEDDING_DIM = 50
+        WINDOW_SZ = 4
+        EMBEDDING_DIM = 20
         W2V_EPOCHS = 10000
         
 
@@ -153,8 +153,8 @@ class NLP_Model():
     def word2vec(self, WINDOW_SZ, EMBEDDING_DIM, W2V_EPOCHS):
         print("WORD2VEC...")
 
-        valid_size = 16 #random word set to evaluate similarity
-        valid_window = 100 #pick samples in 100 most common words
+        valid_size = 20 #random word set to evaluate similarity
+        valid_window = 500 #pick samples in 500 most common words
         valid_examples = np.random.choice(valid_window, valid_size, replace=False)
 
         vocab_size = self.vocab_size
@@ -202,6 +202,53 @@ class NLP_Model():
         #cosine similarity to be used in validation model
         similarity = Dot( axes=1, normalize= True)([target,context])
         validation_model = Model(inputs=[input_target,input_context], outputs=similarity)
+        
+
+        reversed_word_index=self.reversed_word_index
+        ## Helper class for validating Word2Vec while training
+        class SimilarityCallback:
+            def run_sim(self):
+                for i in range(valid_size):
+                    valid_word = reversed_word_index[valid_examples[i]]
+                    top_k = 8 #num of nearest neighbors
+                    sim = self._get_sim(valid_examples[i])
+                    nearest = (-sim).argsort()[1 : top_k+1]
+                    log_str = 'Nearest to %s:' % valid_word
+                    for k in range(top_k):
+                        close_word = reversed_word_index[nearest[k]]
+                        log_str = '%s %s,' % (log_str, close_word)
+                    print(log_str)
+
+            @staticmethod
+            def _get_sim(valid_word_idx):
+                sim = np.zeros((vocab_size,))
+                in_arr1 = np.zeros((1,))
+                in_arr2 = np.zeros((1,))
+                for i in range(vocab_size):
+                    in_arr1[0,] = valid_word_idx
+                    in_arr2[0,] = i
+                    out = validation_model.predict_on_batch([in_arr1,in_arr2])
+                    sim[i] = out
+                return sim
+        
+        sim_cb = SimilarityCallback()
+
+        arr_1 = np.zeros((1,))
+        arr_2 = np.zeros((1,))
+        arr_3 = np.zeros((1,))
+        for cnt in range(W2V_EPOCHS):
+            idx = np.random.randint(0, len(labels)-1)
+            arr_1[0,] = word_target[idx]
+            arr_2[0,] = word_context[idx]
+            arr_3[0,] = labels[idx]
+            loss = model.train_on_batch([arr_1, arr_2], arr_3)
+            if cnt % 100 == 0:
+               print("Iteration {}, loss={}".format(cnt, loss))
+            if cnt % 500 == 0:
+               sim_cb.run_sim()
+
+
+
 
 
        
