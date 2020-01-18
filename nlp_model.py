@@ -236,16 +236,21 @@ class NLP_Model():
         arr_1 = np.zeros((1,))
         arr_2 = np.zeros((1,))
         arr_3 = np.zeros((1,))
+        ## Train network
         for cnt in range(W2V_EPOCHS):
             idx = np.random.randint(0, len(labels)-1)
             arr_1[0,] = word_target[idx]
             arr_2[0,] = word_context[idx]
             arr_3[0,] = labels[idx]
             loss = model.train_on_batch([arr_1, arr_2], arr_3)
+            # Every 100 epochs print loss
             if cnt % 100 == 0:
                print("Iteration {}, loss={}".format(cnt, loss))
+            # Every 500 run similarity test on validation data
             if cnt % 500 == 0:
                sim_cb.run_sim()
+
+
 
 
 
